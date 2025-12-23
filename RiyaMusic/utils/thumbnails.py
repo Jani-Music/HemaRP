@@ -1,206 +1,134 @@
+import os
+import re
+import aiofiles
+import aiohttp
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from youtubesearchpython.__future__ import VideosSearch
+from config import YOUTUBE_IMG_URL
 
-from functools import wraps 
+# Constants
+CACHE_DIR = "cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
 
-from pyrogram import Client
-from pyrogram.types import Message
-from pyrogram.enums import ChatMemberStatus, ChatType
+PANEL_W, PANEL_H = 763, 545
+PANEL_X = (1280 - PANEL_W) // 2
+PANEL_Y = 88
+TRANSPARENCY = 170
+INNER_OFFSET = 36
 
-from RiyaMusic import app
+THUMB_W, THUMB_H = 542, 273
+THUMB_X = PANEL_X + (PANEL_W - THUMB_W) // 2
+THUMB_Y = PANEL_Y + INNER_OFFSET
 
-from config import OWNER_ID, BOT_USERNAME
-from RiyaMusic.misc import SUDOERS
+TITLE_X = 377
+META_X = 377
+TITLE_Y = THUMB_Y + THUMB_H + 10
+META_Y = TITLE_Y + 45
 
-COMMANDERS = [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+BAR_X, BAR_Y = 388, META_Y + 45
+BAR_RED_LEN = 280
+BAR_TOTAL_LEN = 480
 
-async def user_has_permission(chat_title : str, chat_id: int, user_id: int, permission: str,bot=True) -> tuple[bool, str]:
+ICONS_W, ICONS_H = 415, 45
+ICONS_X = PANEL_X + (PANEL_W - ICONS_W) // 2
+ICONS_Y = BAR_Y + 48
+
+MAX_TITLE_WIDTH = 580
+
+def trim_to_width(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> str:
+    ellipsis = "…"
+    if font.getlength(text) <= max_w:
+        return text
+    for i in range(len(text) - 1, 0, -1):
+        if font.getlength(text[:i] + ellipsis) <= max_w:
+            return text[:i] + ellipsis
+    return ellipsis
+
+async def get_thumb(videoid: str) -> str:
+    cache_path = os.path.join(CACHE_DIR, f"{videoid}_v4.png")
+    if os.path.exists(cache_path):
+        return cache_path
+
+    # YouTube video data fetch
+    results = VideosSearch(f"https://www.youtube.com/watch?v={videoid}", limit=1)
     try:
-        if user_id in SUDORES:
-            have_permission = True
-        else:
-            chat_member = await app.get_chat_member(chat_id, user_id)
-            chat_permissions = chat_member.privileges
-            if permission == "can_delete_messages":
-                have_permission = chat_permissions.can_delete_messages
-            elif permission == "can_manage_chat":
-                have_permission = chat_permissions.can_manage_chat
-            elif permission == "can_manage_video_chats":
-                have_permission = chat_permissions.can_manage_video_chats
-            elif permission == "can_restrict_members":
-                have_permission = chat_permissions.can_restrict_members
-            elif permission == "can_promote_members":
-                have_permission = chat_permissions.can_promote_members
-            elif permission == "can_change_info":
-                have_permission = chat_permissions.can_change_info
-            elif permission == "can_post_messages":
-                have_permission = chat_permissions.can_post_messages
-            elif permission == "can_edit_messages":
-                have_permission = chat_permissions.can_edit_messages
-            elif permission == "can_invite_users":
-                have_permission = chat_permissions.can_invite_users
-            elif permission == "can_pin_messages":
-                have_permission = chat_permissions.can_pin_messages    
-            else:
-                have_permission = False
+        results_data = await results.next()
+        result_items = results_data.get("result", [])
+        if not result_items:
+            raise ValueError("No results found.")
+        data = result_items[0]
+        title = re.sub(r"\W+", " ", data.get("title", "Unsupported Title")).title()
+        thumbnail = data.get("thumbnails", [{}])[0].get("url", YOUTUBE_IMG_URL)
+        duration = data.get("duration")
+        views = data.get("viewCount", {}).get("short", "Unknown Views")
+    except Exception:
+        title, thumbnail, duration, views = "Unsupported Title", YOUTUBE_IMG_URL, None, "Unknown Views"
 
-    except Exception as e:
-        print(e)
-        have_permission = False
+    is_live = not duration or str(duration).strip().lower() in {"", "live", "live now"}
+    duration_text = "Live" if is_live else duration or "Unknown Mins"
 
-    if not have_permission:
-        if bot:
-            txt = f"I Don't Have The Following Right:\n**[{permission}]**\nIn **{chat_title}**."
-        else:
-            txt = f"You Don't Have The Following Right:\n{permission}\nIn {chat_title}. So You Cant Perform This Action"
-        return have_permission, txt
-    else:
-        return have_permission, None
+    # Download thumbnail
+    thumb_path = os.path.join(CACHE_DIR, f"thumb{videoid}.png")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(thumbnail) as resp:
+                if resp.status == 200:
+                    async with aiofiles.open(thumb_path, "wb") as f:
+                        await f.write(await resp.read())
+    except Exception:
+        return YOUTUBE_IMG_URL
 
+    # Create base image
+    base = Image.open(thumb_path).resize((1280, 720)).convert("RGBA")
+    bg = ImageEnhance.Brightness(base.filter(ImageFilter.BoxBlur(10))).enhance(0.6)
 
-def bot_admin(func):
-    @wraps(func)
-    async def is_bot_admin(app : Client, message : Message,*args,**kwargs):
-        chat_type = message.chat.type
-        if chat_type == ChatType.PRIVATE:
-            return await message.reply("Use This Command In Groups")
-        BOT = await app.get_chat_member(message.chat.id,BOT_USERNAME)                 
-        if BOT.status != ChatMemberStatus.ADMINISTRATOR:                                       
-            await message.reply_text(f"I Am Not Admin In **{message.chat.title}**")
-            return 
-        return await func(app,message,*args,**kwargs)
-    return is_bot_admin
+    # Frosted glass panel
+    panel_area = bg.crop((PANEL_X, PANEL_Y, PANEL_X + PANEL_W, PANEL_Y + PANEL_H))
+    overlay = Image.new("RGBA", (PANEL_W, PANEL_H), (255, 255, 255, TRANSPARENCY))
+    frosted = Image.alpha_composite(panel_area, overlay)
+    mask = Image.new("L", (PANEL_W, PANEL_H), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, PANEL_W, PANEL_H), 50, fill=255)
+    bg.paste(frosted, (PANEL_X, PANEL_Y), mask)
 
-def bot_can_ban(func):
-    @wraps(func)
-    async def can_restrict(app : Client, message : Message,*args,**kwargs):
-        BOT = await app.get_chat_member(message.chat.id,BOT_USERNAME)
-                 
-        if not BOT.privileges.can_restrict_members:                        
-            await message.reply_text(f"I Don't Have Rights To Restrict The User In **{message.chat.title}**.")
-            return 
-        return await func(app,message,*args,**kwargs)
-    return can_restrict
+    # Draw details
+    draw = ImageDraw.Draw(bg)
+    try:
+        title_font = ImageFont.truetype("RiyaMusic/assets/thumb/font2.ttf", 32)
+        regular_font = ImageFont.truetype("RiyaMusic/assets/thumb/font.ttf", 18)
+    except OSError:
+        title_font = regular_font = ImageFont.load_default()
 
-def bot_can_change_info(func):
-    @wraps(func)
-    async def can_change_info(app : Client, message : Message,*args,**kwargs):
-        BOT = await app.get_chat_member(message.chat.id,BOT_USERNAME)
+    thumb = base.resize((THUMB_W, THUMB_H))
+    tmask = Image.new("L", thumb.size, 0)
+    ImageDraw.Draw(tmask).rounded_rectangle((0, 0, THUMB_W, THUMB_H), 20, fill=255)
+    bg.paste(thumb, (THUMB_X, THUMB_Y), tmask)
 
-        if not BOT.privileges.can_change_info:                         
-            await message.reply_text(f"I Don't Have Rights To Change Info In **{message.chat.title}**.")
-            return 
-        return await func(app,message,*args,**kwargs)
-    return can_change_info
+    draw.text((TITLE_X, TITLE_Y), trim_to_width(title, title_font, MAX_TITLE_WIDTH), fill="black", font=title_font)
+    draw.text((META_X, META_Y), f"YouTube | {views}", fill="black", font=regular_font)
 
+    # Progress bar
+    draw.line([(BAR_X, BAR_Y), (BAR_X + BAR_RED_LEN, BAR_Y)], fill="red", width=6)
+    draw.line([(BAR_X + BAR_RED_LEN, BAR_Y), (BAR_X + BAR_TOTAL_LEN, BAR_Y)], fill="gray", width=5)
+    draw.ellipse([(BAR_X + BAR_RED_LEN - 7, BAR_Y - 7), (BAR_X + BAR_RED_LEN + 7, BAR_Y + 7)], fill="red")
 
-def bot_can_promote(func):
-    @wraps(func)
-    async def can_promote(app : Client, message : Message,*args,**kwargs):
-        BOT = await app.get_chat_member(message.chat.id,BOT_USERNAME)
+    draw.text((BAR_X, BAR_Y + 15), "00:00", fill="black", font=regular_font)
+    end_text = "Live" if is_live else duration_text
+    draw.text((BAR_X + BAR_TOTAL_LEN - (90 if is_live else 60), BAR_Y + 15), end_text, fill="red" if is_live else "black", font=regular_font)
 
-        if not BOT.privileges.can_promote_members:                         
-            await message.reply_text(f"I Don't Have Rights To Promote Users In **{message.chat.title}**.")
-            return 
-        return await func(app,message,*args,**kwargs)
-    return can_promote
+    # Icons
+    icons_path = "RiyaMusic/assets/thumb/play_icons.png"
+    if os.path.isfile(icons_path):
+        ic = Image.open(icons_path).resize((ICONS_W, ICONS_H)).convert("RGBA")
+        r, g, b, a = ic.split()
+        black_ic = Image.merge("RGBA", (r.point(lambda *_: 0), g.point(lambda *_: 0), b.point(lambda *_: 0), a))
+        bg.paste(black_ic, (ICONS_X, ICONS_Y), black_ic)
 
+    # Cleanup and save
+    try:
+        os.remove(thumb_path)
+    except OSError:
+        pass
 
-def bot_can_pin(func):
-    @wraps(func)
-    async def can_pin(app : Client, message : Message,*args,**kwargs):
-        BOT = await app.get_chat_member(message.chat.id,BOT_USERNAME)
+    bg.save(cache_path)
+    return cache_path
 
-        if not BOT.privileges.can_pin_messages:                         
-            await message.reply_text(f"I Don't Have Rights To Pin Messages In **{message.chat.title}**.")
-            return 
-        return await func(app,message,*args,**kwargs)
-    return can_pin
-
-def bot_can_del(func):
-    @wraps(func)
-    async def can_delete(app : Client, message : Message,*args,**kwargs):
-        BOT = await app.get_chat_member(message.chat.id,BOT_USERNAME)
-
-        if not BOT.privileges.can_delete_messages:                         
-            await message.reply_text(f"I Don't Have Rights To Delete Messages In **{message.chat.title}**.")
-            return 
-        return await func(app,message,*args,**kwargs)
-    return can_delete
-
-def user_admin(mystic):
-    @wraps(mystic)
-    async def wrapper(app : Client, message : Message,*args,**kwargs):
-        chat_type = message.chat.type
-        if chat_type == ChatType.PRIVATE:
-            return await message.reply("Use This Command In Groups Only")
-        if message.sender_chat:
-            if message.sender_chat.id == message.chat.id:
-                return await message.reply("You Are Anonymous Admin Please Use User ID")
-            else:
-                return await message.reply_text("You Are Not Admin")
-                
-        else:
-            user_id = message.from_user.id    
-            chat_id = message.chat.id
-            user = await app.get_chat_member(chat_id,user_id) 
-        
-            if (user.status not in COMMANDERS) and user_id not in SUDORES:
-                return await message.reply_text("You Are Not Admin")
-                                                                            
-        return await mystic(app,message,*args,**kwargs)
-
-    return wrapper
-
-def user_can_ban(mystic):
-    @wraps(mystic)
-    async def wrapper(app : Client, message : Message,*args,**kwargs):
-        user_id = message.from_user.id
-        chat_id = message.chat.id
-        user = await app.get_chat_member(chat_id,user_id)
-        
-        if (user.privileges and not user.privileges.can_restrict_members) and user_id not in SUDORES: 
-
-            return await message.reply_text("You Dont Have Right To Restrict Users.") 
-                                                    
-        return await mystic(app,message,*args,**kwargs)
-    return wrapper
-
-def user_can_del(mystic):
-    @wraps(mystic)
-    async def wrapper(app : Client, message : Message,*args,**kwargs):
-        user_id = message.from_user.id
-        chat_id = message.chat.id
-        user = await app.get_chat_member(chat_id,user_id)
-        
-        if (user.status in COMMANDERS and not user.privileges.can_delete_messages) and user_id not in SUDORES:                     
-            return await message.reply_text("You Dont Have Right To Delete Messages") 
-                                                    
-        return await mystic(app,message,*args,**kwargs)
-    return wrapper
-            
-
-def user_can_change_info(mystic):
-    @wraps(mystic)
-    async def wrapper(app : Client, message : Message,*args,**kwargs):
-        user_id = message.from_user.id
-        chat_id = message.chat.id
-        user = await app.get_chat_member(chat_id,user_id)
-        
-        if (user.status in COMMANDERS and not user.privileges.can_change_info) and user_id not in SUDORES:                     
-            return await message.reply_text("You Dont Have Right To Change Info Of This Group.") 
-                                                    
-        return await mystic(app,message,*args,**kwargs)
-    return wrapper
-            
-def user_can_promote(mystic):
-    @wraps(mystic)
-    async def wrapper(app : Client, message : Message,*args,**kwargs):
-        user_id = message.from_user.id
-        chat_id = message.chat.id
-        user = await app.get_chat_member(chat_id,user_id)
-        
-        if (user.status in COMMANDERS and not user.privileges.can_promote_members) and user_id not in SUDORES:                     
-            return await message.reply_text("You Dont Have Right To Promote Users Of This Group.") 
-                                                    
-        return await mystic(app,message,*args,**kwargs)
-    return wrapper
-        
