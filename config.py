@@ -40,8 +40,8 @@ GIT_TOKEN = getenv(
 )  # Fill this variable if your upstream repository is private
 
 
-API_KEY = getenv("API_KEY", "StrangerApic0b57ec")
-API_BASE_URL = getenv("API_BASE_URL", "http://riyabots.site")
+API_KEY = getenv("API_KEY", "30DxNexGenBotsdc9b8a")
+API_BASE_URL = getenv("API_BASE_URL", "https://console.nexgenbots.xyz")
 
 SUPPORT_CHANNEL = getenv("SUPPORT_CHANNEL", "https://t.me/Vip_Jani_OP")
 SUPPORT_CHAT = getenv("SUPPORT_CHAT", "https://t.me/+Fgru4laNvJpkMGI1")
