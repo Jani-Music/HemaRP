@@ -40,8 +40,9 @@ GIT_TOKEN = getenv(
 )  # Fill this variable if your upstream repository is private
 
 
-API_KEY = getenv("API_KEY", "30DxNexGenBotsdc9b8a")
-API_BASE_URL = getenv("API_BASE_URL", "https://console.nexgenbots.xyz")
+API_URL = getenv("API_URL", 'https://api2.nexgenbots.xyz') #youtube song url
+VIDEO_API_URL = getenv("VIDEO_API_URL", 'https://api.video.nexgenbots.xyz')
+API_KEY = getenv("API_KEY", "30DxNexGenBotsdc9b8a") # youtube song api key, generate free key or buy paid plan from panel.thequickearn.xyz
 
 SUPPORT_CHANNEL = getenv("SUPPORT_CHANNEL", "https://t.me/Vip_Jani_OP")
 SUPPORT_CHAT = getenv("SUPPORT_CHAT", "https://t.me/+Fgru4laNvJpkMGI1")
